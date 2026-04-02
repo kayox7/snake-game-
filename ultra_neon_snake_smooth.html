@@ -1,0 +1,268 @@
+
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+#root { font-family: monospace; display: flex; flex-direction: column; align-items: center; padding: 12px 8px; background: transparent; }
+#scorebar { display: flex; justify-content: space-between; align-items: center; width: 420px; margin-bottom: 10px; }
+.pill { background: #0a0f1a; border: 1px solid #00ffcc33; border-radius: 20px; padding: 4px 16px; font-size: 11px; letter-spacing: 1.5px; color: #00ffcc; }
+.pill span { font-size: 17px; font-weight: 700; color: #00ffcc; display: block; text-align: center; text-shadow: 0 0 8px #00ffcc; }
+.pill.pink { border-color: #ff00ff33; color: #ff00ff; }
+.pill.pink span { color: #ff00ff; text-shadow: 0 0 8px #ff00ff; }
+.pill.gold { border-color: #ffdd0033; color: #ffdd00; }
+.pill.gold span { color: #ffdd00; text-shadow: 0 0 8px #ffdd00; }
+#wrap { position: relative; border-radius: 12px; overflow: hidden; border: 1.5px solid #00ffcc22; box-shadow: 0 0 60px #00ffcc11, 0 0 120px #ff00ff08; }
+canvas { display: block; }
+#ov { position: absolute; inset: 0; background: rgba(0,0,0,0.85); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
+#ov.hide { display: none; }
+#ov h2 { font-size: 24px; color: #00ffcc; text-shadow: 0 0 20px #00ffcc; letter-spacing: 4px; }
+#ov p { font-size: 12px; color: #ffffff66; letter-spacing: 1px; }
+#ov small { font-size: 11px; color: #ffffff33; }
+#sbtn { margin-top: 6px; padding: 10px 36px; border-radius: 24px; border: 1.5px solid #00ffcc; background: transparent; color: #00ffcc; font-size: 13px; font-family: monospace; letter-spacing: 2px; cursor: pointer; }
+#sbtn:hover { background: #00ffcc18; box-shadow: 0 0 24px #00ffcc44; }
+#dpad { display: grid; grid-template-columns: 38px 38px 38px; grid-template-rows: 38px 38px; gap: 4px; margin-top: 12px; }
+.db { background: #0a0f1a; border: 1px solid #00ffcc33; border-radius: 8px; color: #00ffcc; font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; user-select: none; transition: background 0.1s; }
+.db:active { background: #00ffcc22; }
+</style>
+
+<div id="root">
+  <div id="scorebar">
+    <div class="pill">SCORE<span id="sc">0</span></div>
+    <div class="pill pink">BEST<span id="hi">0</span></div>
+    <div class="pill gold">LEVEL<span id="lv">1</span></div>
+  </div>
+  <div id="wrap">
+    <canvas id="c"></canvas>
+    <div id="ov">
+      <h2 id="ot">⚡ NEON SNAKE</h2>
+      <p id="os">Arrow keys / WASD to move</p>
+      <small>Eat food. Don't crash.</small>
+      <button id="sbtn">START GAME</button>
+    </div>
+  </div>
+  <div id="dpad">
+    <div></div><div class="db" id="bu">▲</div><div></div>
+    <div class="db" id="bl">◀</div><div class="db" id="bd">▼</div><div class="db" id="br">▶</div>
+  </div>
+</div>
+
+<script>
+const COLS = 21, ROWS = 21, CELL = 20;
+const W = COLS * CELL, H = ROWS * CELL;
+const cv = document.getElementById('c');
+cv.width = W; cv.height = H;
+const ctx = cv.getContext('2d');
+const ov = document.getElementById('ov');
+const ot = document.getElementById('ot');
+const os = document.getElementById('os');
+const sbtn = document.getElementById('sbtn');
+const scEl = document.getElementById('sc');
+const hiEl = document.getElementById('hi');
+const lvEl = document.getElementById('lv');
+
+// --- State ---
+let snake, dir, inputQueue, food, particles, score, best = 0, level, msPerStep, running, rid, prevT, acc, flash, dying, dyingTimer;
+
+function rand(n) { return Math.floor(Math.random() * n); }
+function placeFood(s) {
+  let f;
+  do { f = [rand(COLS), rand(ROWS)]; } while (s.some(([x,y]) => x===f[0]&&y===f[1]));
+  return f;
+}
+
+function init() {
+  snake = [[10,10],[10,9],[10,8],[10,7]];
+  dir = [0,1];
+  inputQueue = [];
+  food = placeFood(snake);
+  particles = [];
+  score = 0; level = 1; msPerStep = 160;
+  flash = 0; dying = false; dyingTimer = 0;
+  scEl.textContent = 0; lvEl.textContent = 1;
+  running = true; acc = 0; prevT = null;
+  ov.classList.add('hide');
+  cancelAnimationFrame(rid);
+  rid = requestAnimationFrame(loop);
+}
+
+// --- Input queue: buffer keypresses so no input is lost ---
+function pushDir(dr, dc) {
+  const last = inputQueue.length ? inputQueue[inputQueue.length-1] : dir;
+  // prevent 180 turns and duplicates
+  if ((dr !== 0 && last[0] === 0) || (dc !== 0 && last[1] === 0)) {
+    if (inputQueue.length < 3) inputQueue.push([dr, dc]);
+  }
+}
+
+window.addEventListener('keydown', e => {
+  switch(e.key) {
+    case 'ArrowUp':    case 'w': case 'W': pushDir(-1, 0); e.preventDefault(); break;
+    case 'ArrowDown':  case 's': case 'S': pushDir( 1, 0); e.preventDefault(); break;
+    case 'ArrowLeft':  case 'a': case 'A': pushDir( 0,-1); e.preventDefault(); break;
+    case 'ArrowRight': case 'd': case 'D': pushDir( 0, 1); e.preventDefault(); break;
+  }
+}, {passive: false});
+
+document.getElementById('bu').onclick = () => pushDir(-1, 0);
+document.getElementById('bd').onclick = () => pushDir( 1, 0);
+document.getElementById('bl').onclick = () => pushDir( 0,-1);
+document.getElementById('br').onclick = () => pushDir( 0, 1);
+sbtn.onclick = init;
+
+// --- Step (discrete grid move) ---
+function step() {
+  // consume next queued direction
+  if (inputQueue.length > 0) dir = inputQueue.shift();
+
+  const [hx, hy] = snake[0];
+  const nx = hx + dir[0], ny = hy + dir[1];
+
+  if (nx < 0 || nx >= COLS || ny < 0 || ny >= ROWS || snake.some(([x,y]) => x===nx&&y===ny)) {
+    dying = true; dyingTimer = 40; running = false;
+    // burst particles from head
+    for (let i=0;i<32;i++) {
+      const a = Math.random()*Math.PI*2, sp = 1.5+Math.random()*5;
+      particles.push({x:hx*CELL+CELL/2,y:hy*CELL+CELL/2,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:1,r:2+Math.random()*5,hue:(rand(360))+'',death:true});
+    }
+    return;
+  }
+
+  snake.unshift([nx, ny]);
+  if (nx === food[0] && ny === food[1]) {
+    score += 10 * level; scEl.textContent = score;
+    if (score > best) { best = score; hiEl.textContent = best; }
+    flash = 6;
+    // eat particles
+    for (let i=0;i<20;i++) {
+      const a=Math.random()*Math.PI*2, sp=1+Math.random()*4;
+      particles.push({x:nx*CELL+CELL/2,y:ny*CELL+CELL/2,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:1,r:2+Math.random()*4,hue:'300',death:false});
+    }
+    const threshold = level * 60;
+    if (score >= threshold) { level++; msPerStep = Math.max(55, msPerStep - 14); lvEl.textContent = level; }
+    food = placeFood(snake);
+  } else {
+    snake.pop();
+  }
+}
+
+// --- Draw ---
+function drawRoundRect(x,y,w,h,r) {
+  ctx.beginPath(); ctx.roundRect(x,y,w,h,r); ctx.fill();
+}
+
+function draw(t) {
+  // interpolation factor for smooth movement
+  const prog = Math.min(acc / msPerStep, 1);
+
+  ctx.clearRect(0,0,W,H);
+
+  // grid
+  ctx.strokeStyle = 'rgba(0,255,204,0.055)'; ctx.lineWidth = 0.5;
+  for (let c=0;c<=COLS;c++) { ctx.beginPath(); ctx.moveTo(c*CELL,0); ctx.lineTo(c*CELL,H); ctx.stroke(); }
+  for (let r=0;r<=ROWS;r++) { ctx.beginPath(); ctx.moveTo(0,r*CELL); ctx.lineTo(W,r*CELL); ctx.stroke(); }
+
+  // food glow
+  const pulse = 0.65 + 0.35 * Math.sin(t * 0.004);
+  const fx = food[1]*CELL+CELL/2, fy = food[0]*CELL+CELL/2;
+  const grd = ctx.createRadialGradient(fx,fy,0,fx,fy,CELL*1.8*pulse);
+  grd.addColorStop(0,'rgba(255,0,255,0.8)'); grd.addColorStop(1,'rgba(255,0,255,0)');
+  ctx.fillStyle = grd; ctx.beginPath(); ctx.arc(fx,fy,CELL*1.8*pulse,0,Math.PI*2); ctx.fill();
+  ctx.save(); ctx.translate(fx,fy); ctx.rotate(Math.PI/4+t*0.0025);
+  ctx.fillStyle='#ff00ff'; ctx.shadowColor='#ff00ff'; ctx.shadowBlur=20;
+  ctx.fillRect(-5.5,-5.5,11,11); ctx.shadowBlur=0; ctx.restore();
+
+  // snake — interpolate head position
+  for (let i = snake.length-1; i>=0; i--) {
+    const [sx,sy] = snake[i];
+    let rx = sy*CELL, ry = sx*CELL;
+
+    // smooth head movement
+    if (i === 0 && running) {
+      const prevX = (snake[1]||snake[0])[1]*CELL;
+      const prevY = (snake[1]||snake[0])[0]*CELL;
+      rx = prevX + (rx - prevX) * prog;
+      ry = prevY + (ry - prevY) * prog;
+    }
+
+    const hue = (170 + i * 7 + t * 0.04) % 360;
+    const sz = CELL - 2;
+    ctx.fillStyle = `hsl(${hue},100%,58%)`;
+    ctx.shadowColor = `hsl(${hue},100%,70%)`;
+    ctx.shadowBlur = i === 0 ? 22 : Math.max(4, 14 - i);
+    drawRoundRect(rx+1, ry+1, sz, sz, i===0 ? 6 : 4);
+
+    if (i === 0) {
+      // eyes follow direction
+      const [dr, dc] = dir;
+      ctx.shadowBlur = 0;
+      const ex1 = rx+CELL/2 + dc*5 + dr*6 - 2.5;
+      const ey1 = ry+CELL/2 + dr*5 + dc*6 - 2.5;
+      const ex2 = rx+CELL/2 - dc*5 + dr*6 - 2.5;
+      const ey2 = ry+CELL/2 - dr*5 + dc*6 - 2.5;
+      ctx.fillStyle='#000'; ctx.beginPath(); ctx.arc(ex1,ey1,2.8,0,Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(ex2,ey2,2.8,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(ex1+0.8,ey1-0.8,1,0,Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(ex2+0.8,ey2-0.8,1,0,Math.PI*2); ctx.fill();
+    }
+  }
+  ctx.shadowBlur = 0;
+
+  // particles
+  for (let i=particles.length-1; i>=0; i--) {
+    const p = particles[i];
+    p.x += p.vx; p.y += p.vy;
+    if (p.death) p.vy += 0.12;
+    p.vx *= 0.94; p.vy *= 0.94;
+    p.life -= p.death ? 0.022 : 0.03;
+    if (p.life <= 0) { particles.splice(i,1); continue; }
+    ctx.globalAlpha = p.life;
+    ctx.fillStyle = `hsl(${p.hue},100%,65%)`;
+    ctx.shadowColor = `hsl(${p.hue},100%,65%)`; ctx.shadowBlur = 8;
+    ctx.beginPath(); ctx.arc(p.x,p.y,p.r*p.life,0,Math.PI*2); ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+  ctx.globalAlpha = 1;
+
+  // dying animation
+  if (dying && dyingTimer > 0) {
+    ctx.fillStyle = `rgba(255,40,40,${(dyingTimer/40)*0.22})`;
+    ctx.fillRect(0,0,W,H);
+    dyingTimer--;
+    if (dyingTimer <= 0) {
+      setTimeout(() => {
+        ot.textContent = '💀 GAME OVER';
+        os.textContent = 'Final score: ' + score;
+        sbtn.textContent = 'PLAY AGAIN';
+        ov.classList.remove('hide');
+      }, 100);
+    }
+  }
+
+  // eat flash
+  if (flash > 0) {
+    ctx.fillStyle = `rgba(255,255,255,${flash*0.025})`;
+    ctx.fillRect(0,0,W,H); flash--;
+  }
+
+  // scanlines
+  for (let y=0;y<H;y+=4) { ctx.fillStyle='rgba(0,0,0,0.07)'; ctx.fillRect(0,y,W,2); }
+}
+
+// --- Main loop (fixed timestep + interpolation) ---
+function loop(ts) {
+  if (!prevT) prevT = ts;
+  const dt = Math.min(ts - prevT, 100); // cap to avoid huge jumps
+  prevT = ts;
+
+  if (running) {
+    acc += dt;
+    while (acc >= msPerStep) { step(); acc -= msPerStep; }
+  } else if (dying) {
+    acc = msPerStep; // freeze interpolation mid-frame during death
+  }
+
+  draw(ts);
+  rid = requestAnimationFrame(loop);
+}
+
+// start idle render
+rid = requestAnimationFrame(loop);
+</script>
